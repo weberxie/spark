@@ -18,16 +18,16 @@
 package org.apache.spark.ml.feature
 
 import org.apache.spark.SparkException
-import org.apache.spark.annotation.Experimental
+import org.apache.spark.annotation.{Since, Experimental}
 import org.apache.spark.ml.{Estimator, Model}
 import org.apache.spark.ml.attribute.{Attribute, NominalAttribute}
 import org.apache.spark.ml.param._
 import org.apache.spark.ml.param.shared._
 import org.apache.spark.ml.Transformer
-import org.apache.spark.ml.util.Identifiable
+import org.apache.spark.ml.util._
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types.{DoubleType, NumericType, StringType, StructType}
+import org.apache.spark.sql.types._
 import org.apache.spark.util.collection.OpenHashMap
 
 /**
@@ -147,9 +147,8 @@ class StringIndexerModel (
       }
     }
 
-    val outputColName = $(outputCol)
     val metadata = NominalAttribute.defaultAttr
-      .withName(outputColName).withValues(labels).toMetadata()
+      .withName($(inputCol)).withValues(labels).toMetadata()
     // If we are skipping invalid records, filter them out.
     val filteredDataset = (getHandleInvalid) match {
       case "skip" => {
@@ -161,7 +160,7 @@ class StringIndexerModel (
       case _ => dataset
     }
     filteredDataset.select(col("*"),
-      indexer(dataset($(inputCol)).cast(StringType)).as(outputColName, metadata))
+      indexer(dataset($(inputCol)).cast(StringType)).as($(outputCol), metadata))
   }
 
   override def transformSchema(schema: StructType): StructType = {
@@ -181,17 +180,16 @@ class StringIndexerModel (
 
 /**
  * :: Experimental ::
- * A [[Transformer]] that maps a column of string indices back to a new column of corresponding
- * string values using either the ML attributes of the input column, or if provided using the labels
- * supplied by the user.
- * All original columns are kept during transformation.
+ * A [[Transformer]] that maps a column of indices back to a new column of corresponding
+ * string values.
+ * The index-string mapping is either from the ML attributes of the input column,
+ * or from user-supplied labels (which take precedence over ML attributes).
  *
  * @see [[StringIndexer]] for converting strings into indices
  */
 @Experimental
-class IndexToString private[ml] (
-  override val uid: String) extends Transformer
-    with HasInputCol with HasOutputCol {
+class IndexToString private[ml] (override val uid: String)
+  extends Transformer with HasInputCol with HasOutputCol with Writable {
 
   def this() =
     this(Identifiable.randomUID("idxToStr"))
@@ -202,32 +200,23 @@ class IndexToString private[ml] (
   /** @group setParam */
   def setOutputCol(value: String): this.type = set(outputCol, value)
 
-  /**
-   * Optional labels to be provided by the user, if not supplied column
-   * metadata is read for labels. The default value is an empty array,
-   * but the empty array is ignored and column metadata used instead.
-   * @group setParam
-   */
+  /** @group setParam */
   def setLabels(value: Array[String]): this.type = set(labels, value)
 
   /**
-   * Param for array of labels.
-   * Optional labels to be provided by the user.
-   * Default: Empty array, in which case column metadata is used for labels.
+   * Optional param for array of labels specifying index-string mapping.
+   *
+   * Default: Empty array, in which case [[inputCol]] metadata is used for labels.
    * @group param
    */
   final val labels: StringArrayParam = new StringArrayParam(this, "labels",
-    "array of labels, if not provided metadata from inputCol is used instead.")
+    "Optional array of labels specifying index-string mapping." +
+      " If not provided or if empty, then metadata from inputCol is used instead.")
   setDefault(labels, Array.empty[String])
 
-  /**
-   * Optional labels to be provided by the user, if not supplied column
-   * metadata is read for labels.
-   * @group getParam
-   */
+  /** @group getParam */
   final def getLabels: Array[String] = $(labels)
 
-  /** Transform the schema for the inverse transformation */
   override def transformSchema(schema: StructType): StructType = {
     val inputColName = $(inputCol)
     val inputDataType = schema(inputColName).dataType
@@ -238,8 +227,7 @@ class IndexToString private[ml] (
     val outputColName = $(outputCol)
     require(inputFields.forall(_.name != outputColName),
       s"Output column $outputColName already exists.")
-    val attr = NominalAttribute.defaultAttr.withName($(outputCol))
-    val outputFields = inputFields :+ attr.toStructField()
+    val outputFields = inputFields :+ StructField($(outputCol), StringType)
     StructType(outputFields)
   }
 
@@ -268,4 +256,17 @@ class IndexToString private[ml] (
   override def copy(extra: ParamMap): IndexToString = {
     defaultCopy(extra)
   }
+
+  @Since("1.6.0")
+  override def write: Writer = new DefaultParamsWriter(this)
+}
+
+@Since("1.6.0")
+object IndexToString extends Readable[IndexToString] {
+
+  @Since("1.6.0")
+  override def read: Reader[IndexToString] = new DefaultParamsReader[IndexToString]
+
+  @Since("1.6.0")
+  override def load(path: String): IndexToString = read.load(path)
 }
